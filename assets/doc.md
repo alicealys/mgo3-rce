@@ -115,11 +115,11 @@ struct mgo_match_t
 #pragma pack(pop)
 ```
 
-As you can tell, `kicked_ids` has a size of 16 and if `kick_num` exceedes that, the following kicked id values will spill over to the rest of the struct. Because both `kick_num` and the individual `kicked_ids` are read from the steam lobby data, which the host has control over, a potential attacker can write anything they want in the struct all the way from the beginning of `kicked_ids` to the end of the struct, which is exactly 1184 bytes in total.  
-This probably wouldn't be a big problem since the struct is dynamically allocated (so its address is unpredictable) and that it mostly just stores match information, if it wasn't for the fact that it **also** stores the pointers to the steam callbacks, which the host of the match also has the ability to trigger remotely.  
-This means that they can call **any** code they want that is present in the binary, by modifying the callback pointer and manually triggering either `on_lobby_data_changed` using `ISteamMatchmaking::SetLobbyData` or `on_lobby_chat_msg` using `ISteamMatchmaking::SendLobbyChatMsg`. This would already classify as a form of remote code execution (not fully), but it can be taken a step further.  
-Like many games out there METAL GEAR ONLINE 3 utilizes Denuvo as part of its anti tampering and digital rights management solutions. One of the key features of Denuvo is code obfuscation, it scrambles the original byte code into a mess that makes it very difficult for a researcher or a modder to understand or debug. For reasons I am still unsure about, Denuvo, and other DRMs like Arxan, have the tendency to set its memory segments that contain this obfuscated code to RWX (read/write/execute) which is unusual because in most scenarios segments that contain code only allow read/execute, while segments that contain data only allow read/write. Allowing all three at once creates a security risk which in this case allows the vulnerability to escalate, opening a path for an attacker to execute whatever code they desire on the victim's machine.
-A way to do this would be to take advantage of the `parse_kicked_ids`, and use it to write to other memory, instead of the `mgo_match_t` struct. Its first parameter is said struct, which can actually be any buffer of memory because it doesn't read any meaningful data from it so it has no important requirements that would prevent us from using it in this way. The second argument, on the other hand, is the steam lobby id, which be tricky to pass to it because as of right now we haven't yet achieved **arbitrary** remote code execution, we can only work with the code that is already present in the game, so we have to find a function, or a piece of code that already exists in memory that can help us achieve this.
+`kicked_ids` has a size of 16, if `kick_num` exceedes that, the following kicked ID values will spill over to the rest of the struct. Because both `kick_num` and the individual `kicked_ids` are read from the steam lobby data, which the host has control over, a potential attacker can write arbitrary data in the struct from the beginning of `kicked_ids` to the end of the buffer.  
+What makes this particularly dangerous is that the buffer stores the pointers to steam callbacks, which the host of the match has the ability to trigger remotely using Steam Matchmaking functions.  
+By modifying the callback pointer (or even its vtable) and manually triggering either `on_lobby_data_changed` using `ISteamMatchmaking::SetLobbyData` or `on_lobby_chat_msg` using `ISteamMatchmaking::SendLobbyChatMsg` an attacker can achieve control flow hijacking and execute any code that is present in the binary, but it can be taken a step further. 
+METAL GEAR ONLINE 3 uses Denuvo as DRM, one of its features is code obfuscation: it scrambles the original byte code into a mess that makes it very difficult for a researcher or a modder to understand or debug. For reasons I am still unsure about, Denuvo, and other DRMs like Arxan, have the tendency to set the memory segments dedicated to obfuscated code to RWX (read/write/execute), which is unusual because normally segments that contain code only allow read/execute, while segments that contain data only allow read/write. Allowing all three at once creates a security risk that allows the vulnerability to escalate, opening a path for an attacker to execute arbitrary code remotely.
+One way to do this would be to take advantage of the `parse_kicked_ids`, and exploit it to write to other memory, instead of the `mgo_match_t` struct. Its first parameter is said struct, which can actually be any buffer of memory because it doesn't read any meaningful data from it so it has no important requirements that would prevent us from using it in this way. The second argument, on the other hand, is the steam lobby ID, which can be difficult to pass to it because we haven't yet achieved **arbitrary** code execution, we can only run code that is already present in the game. We have to find a function, or a piece of code that already exists in memory that can help us achieve this.
 An example would be the following:
 
 ```asm
@@ -128,7 +128,7 @@ An example would be the following:
 00000001405A452A C3                    retn
 ```
 
-This is a small function segment that reads the first 8 bytes from `*rdx`, the second argument, and stores it into `*(rcx + 2768)`, the first argument. This is perfect for this scenario, because the callback for `on_lobby_chat_msg` takes as second parameter the `LobbyChatMsg_t` struct that is passed from the steam API, which looks like this:
+It is a small function segment that reads the first 8 bytes from `*rdx`, the second argument, and stores it into `*(rcx + 2768)`, the first argument. This is perfect for this scenario, because the callback for `on_lobby_chat_msg` takes as second parameter the `LobbyChatMsg_t` struct that is passed from the steam API, which looks like this:
 
 ```c
 struct LobbyChatMsg_t
@@ -140,9 +140,9 @@ struct LobbyChatMsg_t
 };
 ```
 
-As you can see the first 8 bytes of it stores the lobby id, so what we can do is set `on_lobby_chat_msg->callback` to `1405A4520` and `on_lobby_chat_msg->arg` to our custom buffer, offset by whatever place we want to store the steam id in it.
+The first 8 bytes of it stores the lobby ID, so we can set `on_lobby_chat_msg->callback` to `1405A4520` and `on_lobby_chat_msg->arg` to our custom buffer, offset by whatever place we want to store the steam id in it.
 
-Now, we cannot "call" `parse_kicked_ids` directly, because doing so would not place the lobby id into the second argument, so we have to call its parent function, which reads the it from the mgo match struct `mgo_match_t::lobby_id` (at offset 1532) and then passes it over:
+Now, we cannot "call" `parse_kicked_ids` directly, because doing so would not place the lobby ID into the second argument, calling its parent function instead works, because it reads the lobby ID from the mgo match struct (`mgo_match_t::lobby_id`) and then passes it over:
 
 ```c
 __int64 __fastcall sub_1405A71E0(mgo_match_t *a1)
@@ -197,9 +197,9 @@ __int64 __fastcall sub_1405A71E0(mgo_match_t *a1)
 }
 ```
 
-Using the `on_lobby_chat_msg` callback we have set earlier we can adjust the pointer to our custom buffer, so that it writes the lobby id at `buffer + 1532`, which would place it exactly where the above function reads it, which, as a result, then passes it onto `parse_kicked_ids`.
+Using the `on_lobby_chat_msg` callback we have set earlier we can adjust the pointer to our custom buffer, so that it writes the lobby ID at `buffer + 1532`, which would place it exactly where the above function reads it.
 
-The last thing we have to do is note that after calling `parse_kicked_ids` if `buffer + 1444` (st_started) or `buffer + 1445` (st_is_transition) aren't zero, the function will crash because it will try to call a function pointer within our custom buffer which obviously won't be there:
+The last thing we have to do is note that after calling `parse_kicked_ids` if `buffer + 1444` (st_started) or `buffer + 1445` (`st_is_transition`) aren't zero, the function will crash because it will try to call a function pointer within our custom buffer which obviously won't be there:
 
 ```c
 // ...
@@ -222,8 +222,7 @@ if ( !st_is_transition && a1->st_is_transition == 1 )
 // ...
 ```
 
-So when we are choosing the address of our buffer (ideally a static address within the game's memory), we need to keep in mind that the memory at `buffer + 1444` has to be 2 consecutive zero bytes. Fortunately this isn't very difficult to do and by doing so it effectively allows us to arbitrarily write any data we want anywhere within the game's memory.  
-This includes memory that contains game code, because, like I said earlier, Denuvo allows us to do so because of its segments having read/write/execute permissions, thus finally achieving arbitrary remote code execution.    
+Because of this, while choosing the address of our buffer (ideally a static address within the game's memory), we need to keep in mind that the memory at `buffer + 1444` has to be 2 consecutive zero bytes. Fortunately, this isn't very difficult and doing so allows us to arbitrarily write any data we want anywhere within the game's memory. This includes memory that contains game code because of Denuvo's insecure memory permissions.  
 
 ## Video demonstration
 
@@ -253,7 +252,7 @@ Steps performed in the video:
 7. Join the host from the client instance: **immediately** after this a browser page opens to "google.com" (this is what I programmed the exploit to do, as a demonstration for it)
 9. Finally, go back to **Cheat Engine** and show how the code at the address `145CB89A6` has **changed**, without having done anything but joining the host's match
 
-This proves that the exploit does indeed exist.
+This proves that the exploit exists.
 
 ## Proof of concept
 
@@ -320,8 +319,8 @@ send_lobby_chat_msg("ABCDEF");
 
 ## The fix
 
-Fixing this vulnerability simply requires capping `kick_num` to 16 in `parse_kicked_ids` (there are 2 instances of this function in the game). Alternatively something like ASLR (Address Space Layout Randomization) enabled would also have prevented this from happening.
+Fixing this vulnerability requires capping `kick_num` to 16 in `parse_kicked_ids` (there are 2 instances of this function in the game). Alternatively something like ASLR (Address Space Layout Randomization) would also have prevented this from happening.
 
 ## Conclusion
 
-I would rate this vulnerability a 9/10, because it would allow a malicious match host to execute ANY code they want on all of the players' machines (and lets them install malware, or remote access tools, or literally anything), with very little effort and only requiring the victim to click to join their lobby, or in the case that the attacker gains host privileges after host migration, it would require no interaction at all. I would suggest that it is fixed ASAP.
+This vulnerability allows a malicious match host to remotely execute arbitrary code on all of the players' machines (they could install malware, or remote access tools, ...), with very little effort and only requires the victim to click to join their lobby, or in the case that the attacker gains host privileges after host migration, it would require no interaction at all. It should be fixed ASAP.
