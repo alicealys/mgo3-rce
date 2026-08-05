@@ -5,6 +5,13 @@ This repository contains information regarding an RCE vulnerability that has bee
 - [documentation](/assets/doc.md)
 - [video demo](/assets/demo.mp4)
 
+## Timeline
+
+- 2026-06-26: vulnerability is discovered
+- 2026-06-26: first contact with Konami
+- 2026-07-01: vulnerability is reported to Konami
+- 2026-08-04: vulnerability is silently patched by Konami (https://steamdb.info/patchnotes/24176213/)
+
 ## Disclaimer
 
 This software has been created purely for the purposes of  
