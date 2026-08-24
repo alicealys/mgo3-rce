@@ -1,6 +1,6 @@
 # MGO3 RCE
 
-This repository contains information regarding [CVE-2026-19874](https://www.cve.org/CVERecord?id=CVE-2026-19874).
+This repository contains information regarding [CVE-2026-19874](https://nvd.nist.gov/vuln/detail/CVE-2026-19874).
 
 - [documentation](/assets/doc.md)
 - [video demo](/assets/demo.mp4)
