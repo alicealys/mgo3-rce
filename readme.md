@@ -1,6 +1,6 @@
 # MGO3 RCE
 
-This repository contains information regarding an RCE vulnerability that has been discovered on Konami's "METAL GEAR ONLINE 3".
+This repository contains information regarding [CVE-2026-19874](https://www.cve.org/CVERecord?id=CVE-2026-19874).
 
 - [documentation](/assets/doc.md)
 - [video demo](/assets/demo.mp4)
